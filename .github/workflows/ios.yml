@@ -1,0 +1,33 @@
+name: Build iOS IPA
+on: workflow_dispatch
+jobs:
+  ios:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Host tools
+        run: |
+          export HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_AUTO_UPDATE=1
+          brew install --quiet pkg-config git nasm
+          xcodebuild -version
+      - name: Build IPA
+        env:
+          BUILD_FFMPEG: "yes"
+          BUILD_SDL2: "no"
+          GOOS: ios
+          GOARCH: arm64
+          CGO_ENABLED: "1"
+          IOS_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          go env -w GO111MODULE=on
+          go mod download
+          ./build/build.sh iOS
+          ls -lah bin/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ikemen-go-ios
+          path: bin/ikemen-go.ipa
