@@ -1,34 +1,54 @@
-name: Build iOS IPA
-on: workflow_dispatch
+name: Build Custom Ikemen GO iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, develop ]
+
 jobs:
-  ios:
+  build-ios:
     runs-on: macos-26
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - name: Checkout Ikemen-GO
+        uses: actions/checkout@v4
+
+      - name: Setup Go 1.27
+        uses: actions/setup-go@v5
         with:
-          go-version: '1.27.x'
+          go-version: "1.27.x"
           cache: true
-      - name: Host tools
+
+      - name: Install host tools
         run: |
-          export HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_ANALYTICS=1
+          export HOMEBREW_NO_AUTO_UPDATE=1
           brew install --quiet pkg-config git nasm
           xcodebuild -version
-      - name: Build IPA
+
+      - name: Clone and patch ikemen-ios wrapper
+        run: |
+          rm -rf build/ios-app/ikemen-ios
+          git clone --depth=1 -b main https://github.com/Jesuszilla/ikemen-ios.git build/ios-app/ikemen-ios
+          python3 build/ios_custom/patch_wrapper.py build/ios-app/ikemen-ios build/ios_custom/IkemenTouchHUD.m
+
+      - name: Build iOS IPA
         env:
-          BUILD_FFMPEG: "yes"
-          BUILD_SDL2: "no"
           GOOS: ios
           GOARCH: arm64
           CGO_ENABLED: "1"
+          BUILD_IOS_IPA: "1"
+          IOS_MIN_VERSION: "17.0"
           IOS_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           chmod +x build/*.sh
           go env -w GO111MODULE=on
           go mod download
-          bash ./build/build.sh iOS
-          ls -lah bin/
-      - uses: actions/upload-artifact@v4
+          IOS_WRAPPER_DIR="$PWD/build/ios-app/ikemen-ios" bash ./build/build.sh iOS
+          ls -lah bin/ikemen-go.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
         with:
-          name: ikemen-go-ios
+          name: ikemen-go-ios-custom
           path: bin/ikemen-go.ipa

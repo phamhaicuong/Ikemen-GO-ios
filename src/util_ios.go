@@ -15,6 +15,8 @@ static void prepare_go_runtime(void) {
     // cgocheck=0: Stop Go from scanning memory pointers (prevents possible crashes)
     // scavenge=off: Stop the background memory reclaimer thread
     setenv("GODEBUG", "asyncpreemptoff=1,cgocheck=0", 1);
+    setenv("GOGC", "50", 1);
+    setenv("GOMEMLIMIT", "1800MiB", 1);
 }
 */
 import "C"
