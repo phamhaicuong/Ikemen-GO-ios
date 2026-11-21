@@ -9,6 +9,7 @@
 static NSString *const kHUDPrefix = @"IkemenCustomHUD_v1_";
 
 static void IkemenSendSDLKey(SDL_Keycode key, BOOL isDown) {
+    if (SDL_WasInit(SDL_INIT_EVENTS) == 0) return;
     SDL_Event ev;
     SDL_zero(ev);
     ev.type = isDown ? SDL_KEYDOWN : SDL_KEYUP;
