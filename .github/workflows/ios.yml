@@ -23,9 +23,10 @@ jobs:
           CGO_ENABLED: "1"
           IOS_BUILD_NUMBER: ${{ github.run_number }}
         run: |
+          chmod +x build/*.sh
           go env -w GO111MODULE=on
           go mod download
-          ./build/build.sh iOS
+          bash ./build/build.sh iOS
           ls -lah bin/
       - uses: actions/upload-artifact@v4
         with:
