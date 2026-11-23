@@ -26,8 +26,9 @@ jobs:
           brew install --quiet pkg-config git nasm
           xcodebuild -version
 
-      - name: Clone and patch ikemen-ios wrapper
+      - name: Patch engine and ikemen-ios wrapper
         run: |
+          python3 build/ios_custom/patch_engine.py .
           rm -rf build/ios-app/ikemen-ios
           git clone --depth=1 -b main https://github.com/Jesuszilla/ikemen-ios.git build/ios-app/ikemen-ios
           python3 build/ios_custom/patch_wrapper.py build/ios-app/ikemen-ios build/ios_custom/IkemenTouchHUD.m

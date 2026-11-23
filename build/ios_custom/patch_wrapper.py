@@ -22,12 +22,12 @@ with open(plist_path, "wb") as fp:
     plistlib.dump(plist_data, fp)
 print("==> Patched Info.plist")
 
-# 2. Chep IkemenTouchHUD duoi dang header de tranh Xcode bien dich trung
+# 2. Cai dat IkemenTouchHUD duoi dang header de tranh bien dich trung
 hud_dst = os.path.join(app_dir, "IkemenTouchHUD_impl.h")
 shutil.copy2(hud_src, hud_dst)
 print("==> Installed IkemenTouchHUD_impl.h")
 
-# 3. Thay TouchOverlayView.m: bo bo dem an nut sau 5s va chuyen cam ung cho IkemenTouchHUD
+# 3. Thay TouchOverlayView.m
 touch_overlay_m = """#import "TouchOverlayView.h"
 
 @implementation TouchOverlayView
@@ -72,7 +72,7 @@ with open(os.path.join(app_dir, "TouchOverlayView.m"), "w", encoding="utf-8", ne
     fp.write(touch_overlay_m)
 print("==> Replaced TouchOverlayView.m")
 
-# 4. Thay TouchOverlayViewController.m: xoa sach XIB cu, gan thang IkemenTouchHUD
+# 4. Thay TouchOverlayViewController.m (bo awakeFromNib, gan HUD gon trong viewDidLoad)
 touch_vc_m = """#import "TouchOverlayViewController.h"
 #import "TouchOverlayView.h"
 #import "ViewController.h"
@@ -84,19 +84,13 @@ touch_vc_m = """#import "TouchOverlayViewController.h"
 
 @implementation TouchOverlayViewController
 
-- (void)awakeFromNib {
-    [super awakeFromNib];
-    if ([self.view isKindOfClass:[TouchOverlayView class]]) {
-        self.overlayView = (TouchOverlayView *)self.view;
-    }
-}
-
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor clearColor];
     self.view.opaque = NO;
     if ([self.view isKindOfClass:[TouchOverlayView class]]) {
         self.overlayView = (TouchOverlayView *)self.view;
+        self.overlayView.delegate = self.parentVC;
     }
     for (UIView *sub in [self.view.subviews copy]) {
         [sub removeFromSuperview];
@@ -108,7 +102,10 @@ touch_vc_m = """#import "TouchOverlayViewController.h"
 
 - (void)setParentVC:(ViewController *)parentVC {
     _parentVC = parentVC;
-    self.overlayView.delegate = _parentVC;
+    if (self.isViewLoaded && [self.view isKindOfClass:[TouchOverlayView class]]) {
+        self.overlayView = (TouchOverlayView *)self.view;
+        self.overlayView.delegate = _parentVC;
+    }
 }
 
 - (void)touchOverlayDidTapGameFolder:(TouchOverlayView *)view {
@@ -123,7 +120,10 @@ with open(os.path.join(app_dir, "TouchOverlayViewController.m"), "w", encoding="
     fp.write(touch_vc_m)
 print("==> Replaced TouchOverlayViewController.m")
 
-# 5. Thay ViewController.m: chay thang tu thu muc Documents (bo qua chon thu muc & bo cho 5 giay)
+# 5. Thay ViewController.m:
+#    - Doc thang tu Documents (I.K.E.M.E.N-Go), tu dong bo file loi engine ma giu nguyen chars/stages/select.def
+#    - Tu sua save/config.ini neu nguoi dung chep data PC vao
+#    - Hien bang loi + nut khoi phuc ngay tren man hinh neu engine dung (khong out ngang)
 vc_m = """#import "GamepadInputs.h"
 #import "ViewController.h"
 #import "TouchOverlayView.h"
@@ -132,6 +132,7 @@ vc_m = """#import "GamepadInputs.h"
 #import <Foundation/Foundation.h>
 #import <GameController/GameController.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <stdio.h>
 #import "zlib.h"
 #import "ZipArchive.h"
 #import "libikemen.h"
@@ -139,12 +140,15 @@ vc_m = """#import "GamepadInputs.h"
 #import "GoWindow.h"
 #import "SDLWindowFix.h"
 
+static NSString *const kCoreSyncMarker = @".ikemen-core-sync-v5";
+
 @interface ViewController ()
 @property (nonatomic, strong) NSURL *assetsFolderURL;
 @property (nonatomic, assign) BOOL ikemenStarted;
 @property (nonatomic, strong) TouchOverlayView *overlayView;
 @property (nonatomic, strong) MetalContainerView *metalContainerView;
 @property (nonatomic, strong) UILabel *bootStatusLabel;
+@property (nonatomic, strong) UIView *errorOverlayView;
 @end
 
 @implementation ViewController
@@ -171,19 +175,20 @@ vc_m = """#import "GamepadInputs.h"
     self.definesPresentationContext = YES;
     IkemenLockOrientationToCurrent();
 
-    self.bootStatusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 40, 320, 80)];
+    self.bootStatusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 40, 320, 90)];
+    self.bootStatusLabel.tag = 9991;
     self.bootStatusLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
     self.bootStatusLabel.textColor = [UIColor whiteColor];
     self.bootStatusLabel.font = [UIFont boldSystemFontOfSize:15];
     self.bootStatusLabel.textAlignment = NSTextAlignmentCenter;
-    self.bootStatusLabel.numberOfLines = 4;
+    self.bootStatusLabel.numberOfLines = 5;
     self.bootStatusLabel.text = @"Dang chuan bi Ikemen GO...";
     [self.view addSubview:self.bootStatusLabel];
 }
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
-    self.bootStatusLabel.frame = CGRectMake(20, (self.view.bounds.size.height - 80) * 0.5, self.view.bounds.size.width - 40, 80);
+    self.bootStatusLabel.frame = CGRectMake(20, (self.view.bounds.size.height - 90) * 0.5, self.view.bounds.size.width - 40, 90);
     for (UIView *view in self.view.subviews) {
         if ([view isKindOfClass:[MetalContainerView class]]) {
             self.metalContainerView = (MetalContainerView *)view;
@@ -231,53 +236,281 @@ vc_m = """#import "GamepadInputs.h"
     }
 
     self.assetsFolderURL = [self documentsAssetsURL];
-    [self prepareDocumentsAndRun];
+    [self prepareDocumentsAndRunForceReset:NO];
 }
 
-- (void)prepareDocumentsAndRun {
+- (void)copyItemOverwriteFrom:(NSString *)src to:(NSString *)dst {
     NSFileManager *fm = [NSFileManager defaultManager];
-    NSString *basePath = self.assetsFolderURL.path;
-    NSString *mainLua = [basePath stringByAppendingPathComponent:@"external/script/main.lua"];
-    NSString *sysBase = [basePath stringByAppendingPathComponent:@"data/system.base.def"];
+    BOOL isDir = NO;
+    if (![fm fileExistsAtPath:src isDirectory:&isDir]) return;
+    if (isDir) {
+        [fm createDirectoryAtPath:dst withIntermediateDirectories:YES attributes:nil error:nil];
+        NSArray<NSString *> *items = [fm contentsOfDirectoryAtPath:src error:nil];
+        for (NSString *item in items) {
+            [self copyItemOverwriteFrom:[src stringByAppendingPathComponent:item]
+                                     to:[dst stringByAppendingPathComponent:item]];
+        }
+    } else {
+        [fm createDirectoryAtPath:[dst stringByDeletingLastPathComponent] withIntermediateDirectories:YES attributes:nil error:nil];
+        if ([fm fileExistsAtPath:dst]) {
+            [fm removeItemAtPath:dst error:nil];
+        }
+        [fm copyItemAtPath:src toPath:dst error:nil];
+    }
+}
 
-    BOOL hasEngineAssets = [fm fileExistsAtPath:mainLua] && [fm fileExistsAtPath:sysBase];
-    if (!hasEngineAssets) {
-        self.bootStatusLabel.hidden = NO;
-        self.bootStatusLabel.text = @"Dang giai nen du lieu mac dinh vao thu muc I.K.E.M.E.N-Go...\\n(Chi chay 1 lan dau)";
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSURL *zipURL = [[NSBundle mainBundle] URLForResource:@"DefaultAssets" withExtension:@"zip"];
-            BOOL ok = NO;
-            NSString *errText = nil;
-            if (!zipURL) {
-                errText = @"Khong tim thay DefaultAssets.zip trong IPA.";
-            } else {
-                NSString *selectDef = [basePath stringByAppendingPathComponent:@"data/select.def"];
-                NSData *savedSelect = [fm fileExistsAtPath:selectDef] ? [NSData dataWithContentsOfFile:selectDef] : nil;
+- (void)repairConfigAtBasePath:(NSString *)basePath {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *saveDir = [basePath stringByAppendingPathComponent:@"save"];
+    [fm createDirectoryAtPath:saveDir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *cfgPath = [saveDir stringByAppendingPathComponent:@"config.ini"];
 
-                ok = [SSZipArchive unzipFileAtPath:zipURL.path toDestination:basePath];
-                if (ok && savedSelect.length > 0) {
-                    [savedSelect writeToFile:selectDef atomically:YES];
-                }
-                if (!ok) {
-                    errText = @"Giai nen DefaultAssets.zip that bai.";
-                }
+    NSArray<NSString *> *motifCandidates = @[
+        @"data/ikemen1/system.def",
+        @"data/system.def",
+        @"data/mugen1/system.def",
+        @"data/system.base.def"
+    ];
+    NSString *fallbackMotif = @"data/ikemen1/system.def";
+    for (NSString *cand in motifCandidates) {
+        if ([fm fileExistsAtPath:[basePath stringByAppendingPathComponent:cand]]) {
+            fallbackMotif = cand;
+            break;
+        }
+    }
+
+    if (![fm fileExistsAtPath:cfgPath]) {
+        return;
+    }
+
+    NSString *txt = [NSString stringWithContentsOfFile:cfgPath encoding:NSUTF8StringEncoding error:nil];
+    if (!txt) {
+        [fm removeItemAtPath:cfgPath error:nil];
+        return;
+    }
+
+    NSMutableArray<NSString *> *outLines = [NSMutableArray array];
+    BOOL changed = NO;
+    for (NSString *rawLine in [txt componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]) {
+        NSString *trim = [rawLine stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if ([trim hasPrefix:@"Motif"] && [trim containsString:@"="]) {
+            NSRange eq = [rawLine rangeOfString:@"="];
+            NSString *val = [[rawLine substringFromIndex:eq.location + 1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            if (val.length == 0 || ![fm fileExistsAtPath:[basePath stringByAppendingPathComponent:val]]) {
+                [outLines addObject:[NSString stringWithFormat:@"Motif = %@", fallbackMotif]];
+                changed = YES;
+                continue;
             }
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if (!ok) {
-                    self.bootStatusLabel.text = errText ?: @"Loi giai nen du lieu.";
-                    return;
-                }
-                self.bootStatusLabel.text = @"Dang khoi dong Ikemen GO...";
+        } else if ([trim hasPrefix:@"System"] && [trim containsString:@"="] && ![trim hasPrefix:@"System."]) {
+            NSRange eq = [rawLine rangeOfString:@"="];
+            NSString *key = [[rawLine substringToIndex:eq.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            if ([key isEqualToString:@"System"]) {
+                [outLines addObject:@"System = external/script/main.lua"];
+                changed = YES;
+                continue;
+            }
+        } else if ([trim hasPrefix:@"RenderMode"] && [trim containsString:@"="]) {
+            [outLines addObject:@"RenderMode = Vulkan 1.3"];
+            changed = YES;
+            continue;
+        } else if ([trim hasPrefix:@"BootLoadingMode"] && [trim containsString:@"="]) {
+            [outLines addObject:@"BootLoadingMode = 0"];
+            changed = YES;
+            continue;
+        }
+        [outLines addObject:rawLine];
+    }
+
+    if (changed) {
+        [[outLines componentsJoinedByString:@"\\n"] writeToFile:cfgPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
+}
+
+- (BOOL)syncEngineCoreAtBasePath:(NSString *)basePath forceFullReset:(BOOL)forceFullReset errorOut:(NSString **)errorOut {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSURL *zipURL = [[NSBundle mainBundle] URLForResource:@"DefaultAssets" withExtension:@"zip"];
+    if (!zipURL) {
+        if (errorOut) *errorOut = @"Khong tim thay DefaultAssets.zip ben trong file IPA.";
+        return NO;
+    }
+
+    BOOL hasChars = [fm fileExistsAtPath:[basePath stringByAppendingPathComponent:@"chars"]];
+    BOOL hasData  = [fm fileExistsAtPath:[basePath stringByAppendingPathComponent:@"data"]];
+    BOOL hasStages = [fm fileExistsAtPath:[basePath stringByAppendingPathComponent:@"stages"]];
+
+    if (forceFullReset || !hasChars || !hasData || !hasStages) {
+        NSString *selectDef = [basePath stringByAppendingPathComponent:@"data/select.def"];
+        NSData *savedSelect = (!forceFullReset && [fm fileExistsAtPath:selectDef]) ? [NSData dataWithContentsOfFile:selectDef] : nil;
+
+        BOOL ok = [SSZipArchive unzipFileAtPath:zipURL.path toDestination:basePath];
+        if (!ok) {
+            if (errorOut) *errorOut = @"Giai nen DefaultAssets.zip vao Documents that bai.";
+            return NO;
+        }
+        if (savedSelect.length > 0) {
+            [savedSelect writeToFile:selectDef atomically:YES];
+        }
+        [@"ok" writeToFile:[basePath stringByAppendingPathComponent:kCoreSyncMarker] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        [self repairConfigAtBasePath:basePath];
+        return YES;
+    }
+
+    BOOL coreSynced = [fm fileExistsAtPath:[basePath stringByAppendingPathComponent:kCoreSyncMarker]];
+    BOOL hasMainLua = [fm fileExistsAtPath:[basePath stringByAppendingPathComponent:@"external/script/main.lua"]];
+    BOOL hasSysBase = [fm fileExistsAtPath:[basePath stringByAppendingPathComponent:@"data/system.base.def"]];
+    BOOL hasCommonZss = [fm fileExistsAtPath:[basePath stringByAppendingPathComponent:@"data/common1.cns.zss"]];
+    BOOL hasGamepadDb = [fm fileExistsAtPath:[basePath stringByAppendingPathComponent:@"external/gamecontrollerdb.txt"]];
+
+    if (!coreSynced || !hasMainLua || !hasSysBase || !hasCommonZss || !hasGamepadDb) {
+        NSString *tmpDir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"IkemenCoreSyncTmp"];
+        [fm removeItemAtPath:tmpDir error:nil];
+        [fm createDirectoryAtPath:tmpDir withIntermediateDirectories:YES attributes:nil error:nil];
+
+        BOOL ok = [SSZipArchive unzipFileAtPath:zipURL.path toDestination:tmpDir];
+        if (ok) {
+            NSArray<NSString *> *corePaths = @[
+                @"external/script",
+                @"external/shaders",
+                @"external/gamecontrollerdb.txt",
+                @"data/system.base.def",
+                @"data/common.air",
+                @"data/common.cmd",
+                @"data/common.const",
+                @"data/common1.cns.zss",
+                @"data/action.zss",
+                @"data/demo.zss",
+                @"data/dizzy.zss",
+                @"data/functions.zss",
+                @"data/guardbreak.zss",
+                @"data/score.zss",
+                @"data/system.zss",
+                @"data/tag.zss",
+                @"data/training.zss",
+                @"font/debug.def",
+                @"font/default-3x5.def",
+                @"font/default-3x5.sff",
+                @"font/default-3x5-bold.def",
+                @"font/default-3x5-bold.sff",
+                @"font/Open_Sans"
+            ];
+            for (NSString *rel in corePaths) {
+                [self copyItemOverwriteFrom:[tmpDir stringByAppendingPathComponent:rel]
+                                         to:[basePath stringByAppendingPathComponent:rel]];
+            }
+            BOOL hasAnyMotif = [fm fileExistsAtPath:[basePath stringByAppendingPathComponent:@"data/ikemen1/system.def"]]
+                            || [fm fileExistsAtPath:[basePath stringByAppendingPathComponent:@"data/system.def"]];
+            if (!hasAnyMotif) {
+                [self copyItemOverwriteFrom:[tmpDir stringByAppendingPathComponent:@"data/ikemen1"]
+                                         to:[basePath stringByAppendingPathComponent:@"data/ikemen1"]];
+            }
+            if (![fm fileExistsAtPath:[basePath stringByAppendingPathComponent:@"data/select.def"]]) {
+                [self copyItemOverwriteFrom:[tmpDir stringByAppendingPathComponent:@"data/select.def"]
+                                         to:[basePath stringByAppendingPathComponent:@"data/select.def"]];
+            }
+            [@"ok" writeToFile:[basePath stringByAppendingPathComponent:kCoreSyncMarker] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
+        [fm removeItemAtPath:tmpDir error:nil];
+    }
+
+    [self repairConfigAtBasePath:basePath];
+    return YES;
+}
+
+- (void)prepareDocumentsAndRunForceReset:(BOOL)forceReset {
+    if (self.errorOverlayView) {
+        [self.errorOverlayView removeFromSuperview];
+        self.errorOverlayView = nil;
+    }
+
+    NSString *basePath = self.assetsFolderURL.path;
+    self.bootStatusLabel.hidden = NO;
+    self.bootStatusLabel.text = forceReset
+        ? @"Dang khoi phuc du lieu mac dinh..."
+        : @"Dang kiem tra du lieu & khoi dong Ikemen GO...";
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSString *errText = nil;
+        BOOL ok = [self syncEngineCoreAtBasePath:basePath forceFullReset:forceReset errorOut:&errText];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!ok) {
+                [self showEngineErrorOverlay:(errText ?: @"Loi chuan bi du lieu.")];
+                return;
+            }
+            self.bootStatusLabel.text = @"Dang khoi dong do hoa Vulkan...";
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 [self runIkemenGo];
             });
         });
-    } else {
-        self.bootStatusLabel.hidden = NO;
-        self.bootStatusLabel.text = @"Dang khoi dong Ikemen GO...";
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [self runIkemenGo];
-        });
+    });
+}
+
+- (void)showEngineErrorOverlay:(NSString *)message {
+    self.bootStatusLabel.hidden = YES;
+    if (self.errorOverlayView) {
+        [self.errorOverlayView removeFromSuperview];
     }
+
+    UIView *overlay = [[UIView alloc] initWithFrame:self.view.bounds];
+    overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    overlay.backgroundColor = [UIColor colorWithWhite:0.05 alpha:0.95];
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 24, overlay.bounds.size.width - 40, 28)];
+    title.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    title.text = @"Ikemen GO da dung (Chi tiet loi)";
+    title.textColor = [UIColor colorWithRed:1.0 green:0.35 blue:0.35 alpha:1.0];
+    title.font = [UIFont boldSystemFontOfSize:17];
+    title.textAlignment = NSTextAlignmentCenter;
+    [overlay addSubview:title];
+
+    UITextView *tv = [[UITextView alloc] initWithFrame:CGRectMake(20, 60, overlay.bounds.size.width - 40, overlay.bounds.size.height - 130)];
+    tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    tv.backgroundColor = [UIColor colorWithWhite:0.12 alpha:1.0];
+    tv.textColor = [UIColor whiteColor];
+    tv.font = [UIFont fontWithName:@"Menlo" size:12] ?: [UIFont systemFontOfSize:12];
+    tv.editable = NO;
+    tv.layer.cornerRadius = 10;
+    tv.text = message ?: @"Khong co chi tiet loi.";
+    [overlay addSubview:tv];
+
+    CGFloat btnY = overlay.bounds.size.height - 56;
+    CGFloat halfW = (overlay.bounds.size.width - 52) * 0.5;
+
+    UIButton *fixCfgBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    fixCfgBtn.frame = CGRectMake(20, btnY, halfW, 40);
+    fixCfgBtn.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleRightMargin;
+    [fixCfgBtn setTitle:@"Xoa config.ini & thu lai" forState:UIControlStateNormal];
+    [fixCfgBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    fixCfgBtn.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+    fixCfgBtn.backgroundColor = [UIColor colorWithRed:0.15 green:0.50 blue:0.90 alpha:1.0];
+    fixCfgBtn.layer.cornerRadius = 8;
+    [fixCfgBtn addTarget:self action:@selector(onTapResetConfig) forControlEvents:UIControlEventTouchUpInside];
+    [overlay addSubview:fixCfgBtn];
+
+    UIButton *resetAllBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    resetAllBtn.frame = CGRectMake(32 + halfW, btnY, halfW, 40);
+    resetAllBtn.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleLeftMargin;
+    [resetAllBtn setTitle:@"Nap lai data mac dinh" forState:UIControlStateNormal];
+    [resetAllBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    resetAllBtn.titleLabel.font = [UIFont boldSystemFontOfSize:13];
+    resetAllBtn.backgroundColor = [UIColor colorWithRed:0.80 green:0.25 blue:0.25 alpha:1.0];
+    resetAllBtn.layer.cornerRadius = 8;
+    [resetAllBtn addTarget:self action:@selector(onTapResetDefaultAssets) forControlEvents:UIControlEventTouchUpInside];
+    [overlay addSubview:resetAllBtn];
+
+    self.errorOverlayView = overlay;
+    [self.view addSubview:overlay];
+}
+
+- (void)onTapResetConfig {
+    NSString *cfgPath = [self.assetsFolderURL.path stringByAppendingPathComponent:@"save/config.ini"];
+    [[NSFileManager defaultManager] removeItemAtPath:cfgPath error:nil];
+    [self prepareDocumentsAndRunForceReset:NO];
+}
+
+- (void)onTapResetDefaultAssets {
+    NSString *cfgPath = [self.assetsFolderURL.path stringByAppendingPathComponent:@"save/config.ini"];
+    [[NSFileManager defaultManager] removeItemAtPath:cfgPath error:nil];
+    [self prepareDocumentsAndRunForceReset:YES];
 }
 
 - (void)runIkemenGo {
@@ -285,11 +518,21 @@ vc_m = """#import "GamepadInputs.h"
         return;
     }
 
-    const char *path = _assetsFolderURL.path.fileSystemRepresentation;
+    NSString *basePath = _assetsFolderURL.path;
+    const char *path = basePath.fileSystemRepresentation;
     if (!path) {
-        self.bootStatusLabel.text = @"Loi: Khong doc duoc duong dan Documents.";
+        [self showEngineErrorOverlay:@"Loi: Khong doc duoc duong dan Documents."];
         return;
     }
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *logsDir = [basePath stringByAppendingPathComponent:@"save/logs"];
+    [fm createDirectoryAtPath:logsDir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *lastErrPath = [logsDir stringByAppendingPathComponent:@"last_error.txt"];
+    NSString *stderrPath = [logsDir stringByAppendingPathComponent:@"boot_stderr.log"];
+    [fm removeItemAtPath:lastErrPath error:nil];
+    freopen(stderrPath.fileSystemRepresentation, "w", stderr);
+    setvbuf(stderr, NULL, _IONBF, 0);
 
     char **argv = calloc(4, sizeof(char *));
     if (!argv) return;
@@ -303,8 +546,8 @@ vc_m = """#import "GamepadInputs.h"
     dispatch_async(dispatch_get_main_queue(), ^{
         SDL_SetMainReady();
 
-        NSString *dbPath = [self.assetsFolderURL.path stringByAppendingPathComponent:@"external/gamecontrollerdb.txt"];
-        if ([[NSFileManager defaultManager] fileExistsAtPath:dbPath]) {
+        NSString *dbPath = [basePath stringByAppendingPathComponent:@"external/gamecontrollerdb.txt"];
+        if ([fm fileExistsAtPath:dbPath]) {
             SDL_SetHint(SDL_HINT_GAMECONTROLLERCONFIG_FILE, [dbPath UTF8String]);
         }
 
@@ -316,9 +559,17 @@ vc_m = """#import "GamepadInputs.h"
         int result = SDL_main(3, argv);
         (void)result;
 
+        fflush(stderr);
         self.ikemenStarted = NO;
-        self.bootStatusLabel.hidden = NO;
-        self.bootStatusLabel.text = @"Engine da dung. Kiem tra thu muc save/logs trong Tep.";
+
+        NSString *errContent = [NSString stringWithContentsOfFile:lastErrPath encoding:NSUTF8StringEncoding error:nil];
+        if (errContent.length == 0) {
+            errContent = [NSString stringWithContentsOfFile:stderrPath encoding:NSUTF8StringEncoding error:nil];
+        }
+        if (errContent.length == 0) {
+            errContent = @"Engine da thoat ma khong ghi loi. Kiem tra thu muc save/logs trong Tep.";
+        }
+        [self showEngineErrorOverlay:errContent];
 
         for (int i = 0; i < 3; i++) {
             free(argv[i]);
@@ -343,19 +594,17 @@ with open(os.path.join(app_dir, "ViewController.m"), "w", encoding="utf-8", newl
     fp.write(vc_m)
 print("==> Replaced ViewController.m")
 
-# 6. An dong chu trang thai boot ngay khi man hinh game Metal hien len
+# 6. An dong trang thai boot (tag 9991) khi MetalContainerView gan vao xong
 sdl_fix_path = os.path.join(app_dir, "SDLWindowFix.m")
 with open(sdl_fix_path, "r", encoding="utf-8", errors="replace") as fp:
     sdl_fix = fp.read()
 
 target_line = "[hostView insertSubview:metalHostView atIndex:0];"
-if target_line in sdl_fix and "Hide boot labels" not in sdl_fix:
+if target_line in sdl_fix and "viewWithTag:9991" not in sdl_fix:
     replacement = (
         target_line + "\n"
-        "    // Hide boot labels once Metal view is ready\n"
-        "    for (UIView *v in hostView.subviews) {\n"
-        "        if ([v isKindOfClass:[UILabel class]]) { v.hidden = YES; }\n"
-        "    }"
+        "    UIView *bootLbl = [hostView viewWithTag:9991];\n"
+        "    if (bootLbl) { bootLbl.hidden = YES; }"
     )
     sdl_fix = sdl_fix.replace(target_line, replacement, 1)
     with open(sdl_fix_path, "w", encoding="utf-8", newline="\n") as fp:
