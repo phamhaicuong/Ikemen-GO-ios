@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 
 repo_root = sys.argv[1]
@@ -24,7 +25,7 @@ for line in util.splitlines():
 write_text(util_path, "\n".join(new_lines) + "\n")
 print("==> Patched src/util_ios.go")
 
-# 2. src/resources/defaultConfig.ini: tra BootLoadingMode=0 & Atlas=1024 on dinh Vulkan, giu toi uu RAM an toan
+# 2. src/resources/defaultConfig.ini: xoa WindowIcon mac dinh + giu toi uu RAM/VRAM on dinh cho iOS
 cfg_path = os.path.join(repo_root, "src", "resources", "defaultConfig.ini")
 cfg = read_text(cfg_path)
 for old, new in [
@@ -43,18 +44,33 @@ for old, new in [
     ("BGMRAMBuffer      = 1", "BGMRAMBuffer      = 0"),
 ]:
     cfg = cfg.replace(old, new)
+cfg = re.sub(r'(?m)^WindowIcon\s*=.*$', 'WindowIcon          =', cfg)
 write_text(cfg_path, cfg)
-print("==> Patched src/resources/defaultConfig.ini")
+print("==> Patched src/resources/defaultConfig.ini (cleared WindowIcon + safe iOS tuning)")
 
-# 3. src/system.go: chong nil-pointer crash khi shutdown som
+# 3. src/system.go:
+#    - Bo qua nap WindowIcon & stdin scanner tren iOS (fix truc tiep loi system.go:545)
+#    - Chong nil-pointer crash trong shutdown()
 sys_path = os.path.join(repo_root, "src", "system.go")
 sys_txt = read_text(sys_path)
+
+old_icon = '\tif runtime.GOOS != "android" {'
+new_icon = '\tif runtime.GOOS != "android" && runtime.GOOS != "ios" {'
+if old_icon in sys_txt:
+    sys_txt = sys_txt.replace(old_icon, new_icon, 1)
+    print("==> Patched src/system.go (skip desktop WindowIcon on iOS)")
+elif new_icon in sys_txt:
+    print("==> src/system.go WindowIcon guard already patched")
+else:
+    print("ERROR: Could not find WindowIcon guard in src/system.go!", file=sys.stderr)
+    sys.exit(1)
+
 old_shut = "\tgfx.Close()\n\ts.window.Close()"
 new_shut = "\tif gfx != nil {\n\t\tgfx.Close()\n\t}\n\tif s.window != nil {\n\t\ts.window.Close()\n\t}"
 if old_shut in sys_txt:
     sys_txt = sys_txt.replace(old_shut, new_shut, 1)
-    write_text(sys_path, sys_txt)
-    print("==> Patched src/system.go")
+    print("==> Patched src/system.go (nil-safe shutdown)")
+write_text(sys_path, sys_txt)
 
 # 4. src/main.go: lam sach os.Args tren iOS, chong nil gfx trong handlePanic, ghi last_error.txt va KHONG os.Exit tren iOS
 main_path = os.path.join(repo_root, "src", "main.go")
