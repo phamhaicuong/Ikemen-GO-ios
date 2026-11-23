@@ -140,7 +140,7 @@ vc_m = """#import "GamepadInputs.h"
 #import "GoWindow.h"
 #import "SDLWindowFix.h"
 
-static NSString *const kCoreSyncMarker = @".ikemen-core-sync-v5";
+static NSString *const kCoreSyncMarker = @".ikemen-core-sync-v6";
 
 @interface ViewController ()
 @property (nonatomic, strong) NSURL *assetsFolderURL;
@@ -290,9 +290,21 @@ static NSString *const kCoreSyncMarker = @".ikemen-core-sync-v5";
     }
 
     NSMutableArray<NSString *> *outLines = [NSMutableArray array];
+    BOOL inKeysP1 = NO;
     BOOL changed = NO;
     for (NSString *rawLine in [txt componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]) {
         NSString *trim = [rawLine stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if ([trim hasPrefix:@"["] && [trim hasSuffix:@"]"]) {
+            inKeysP1 = [trim isEqualToString:@"[Keys_P1]"];
+        } else if (inKeysP1 && [trim hasPrefix:@"menu"] && [trim containsString:@"="]) {
+            [outLines addObject:@"menu = TAB"];
+            changed = YES;
+            continue;
+        } else if ([trim hasPrefix:@"FirstRun"] && [trim containsString:@"="]) {
+            [outLines addObject:@"FirstRun = 0"];
+            changed = YES;
+            continue;
+        }
         if ([trim hasPrefix:@"Motif"] && [trim containsString:@"="]) {
             NSRange eq = [rawLine rangeOfString:@"="];
             NSString *val = [[rawLine substringFromIndex:eq.location + 1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
@@ -406,6 +418,29 @@ static NSString *const kCoreSyncMarker = @".ikemen-core-sync-v5";
             if (![fm fileExistsAtPath:[basePath stringByAppendingPathComponent:@"data/select.def"]]) {
                 [self copyItemOverwriteFrom:[tmpDir stringByAppendingPathComponent:@"data/select.def"]
                                          to:[basePath stringByAppendingPathComponent:@"data/select.def"]];
+            }
+            // Tu dong chep cac nhan vat dong goi san (nhu Goku) neu chua co trong Documents/chars
+            NSString *tmpChars = [tmpDir stringByAppendingPathComponent:@"chars"];
+            NSString *dstChars = [basePath stringByAppendingPathComponent:@"chars"];
+            NSArray<NSString *> *bundledChars = [fm contentsOfDirectoryAtPath:tmpChars error:nil];
+            for (NSString *ch in bundledChars) {
+                if ([ch hasPrefix:@"."]) continue;
+                NSString *dstCh = [dstChars stringByAppendingPathComponent:ch];
+                if (![fm fileExistsAtPath:dstCh]) {
+                    [self copyItemOverwriteFrom:[tmpChars stringByAppendingPathComponent:ch] to:dstCh];
+                }
+            }
+            // Cap nhat select.def cho Goku neu chua co
+            NSString *tmpSel = [tmpDir stringByAppendingPathComponent:@"data/select.def"];
+            NSString *dstSel = [basePath stringByAppendingPathComponent:@"data/select.def"];
+            if ([fm fileExistsAtPath:tmpSel] && [fm fileExistsAtPath:dstSel]) {
+                NSString *tStr = [NSString stringWithContentsOfFile:tmpSel encoding:NSUTF8StringEncoding error:nil];
+                NSString *dStr = [NSString stringWithContentsOfFile:dstSel encoding:NSUTF8StringEncoding error:nil];
+                if (tStr && dStr && [tStr containsString:@"Goku SSJ Infinity"] && ![dStr containsString:@"Goku SSJ Infinity"]) {
+                    NSString *merged = [dStr stringByReplacingOccurrencesOfString:@"[Characters]"
+                                                                       withString:@"[Characters]\\nGoku SSJ Infinity Ultra Instinct/Goku SSJ Infinity Ultra Instinct.def, random"];
+                    [merged writeToFile:dstSel atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                }
             }
             [@"ok" writeToFile:[basePath stringByAppendingPathComponent:kCoreSyncMarker] atomically:YES encoding:NSUTF8StringEncoding error:nil];
         }

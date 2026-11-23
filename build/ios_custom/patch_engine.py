@@ -12,7 +12,7 @@ def write_text(path, content):
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(content.replace("\r\n", "\n"))
 
-# 1. src/util_ios.go: GODEBUG + GOGC=50 an toan (bo GOMEMLIMIT de tranh xung dot runtime)
+# 1. src/util_ios.go
 util_path = os.path.join(repo_root, "src", "util_ios.go")
 util = read_text(util_path)
 new_lines = []
@@ -25,7 +25,7 @@ for line in util.splitlines():
 write_text(util_path, "\n".join(new_lines) + "\n")
 print("==> Patched src/util_ios.go")
 
-# 2. src/resources/defaultConfig.ini: xoa WindowIcon mac dinh + giu toi uu RAM/VRAM on dinh cho iOS
+# 2. src/resources/defaultConfig.ini
 cfg_path = os.path.join(repo_root, "src", "resources", "defaultConfig.ini")
 cfg = read_text(cfg_path)
 for old, new in [
@@ -34,6 +34,7 @@ for old, new in [
     ("ExplodMax           = 512", "ExplodMax           = 256"),
     ("ProjectileMax       = 256", "ProjectileMax       = 128"),
     ("BootLoadingMode     = 2", "BootLoadingMode     = 0"),
+    ("FirstRun            = 1", "FirstRun            = 0"),
     ("VRAMSwapThresholdPercent = 80", "VRAMSwapThresholdPercent = 70"),
     ("VRAMSwapThresholdPercent = 65", "VRAMSwapThresholdPercent = 70"),
     ("LifeBarTextureAtlasSize = 512", "LifeBarTextureAtlasSize = 1024"),
@@ -45,25 +46,27 @@ for old, new in [
 ]:
     cfg = cfg.replace(old, new)
 cfg = re.sub(r'(?m)^WindowIcon\s*=.*$', 'WindowIcon          =', cfg)
-write_text(cfg_path, cfg)
-print("==> Patched src/resources/defaultConfig.ini (cleared WindowIcon + safe iOS tuning)")
 
-# 3. src/system.go:
-#    - Bo qua nap WindowIcon & stdin scanner tren iOS (fix truc tiep loi system.go:545)
-#    - Chong nil-pointer crash trong shutdown()
+out_cfg = []
+in_p1 = False
+for line in cfg.splitlines():
+    st = line.strip()
+    if st.startswith("[") and st.endswith("]"):
+        in_p1 = (st == "[Keys_P1]")
+    elif in_p1 and re.match(r'^menu\s*=', st):
+        line = "menu     = TAB"
+    out_cfg.append(line)
+write_text(cfg_path, "\n".join(out_cfg) + "\n")
+print("==> Patched src/resources/defaultConfig.ini (WindowIcon cleared, FirstRun=0, Keys_P1 menu=TAB)")
+
+# 3. src/system.go
 sys_path = os.path.join(repo_root, "src", "system.go")
 sys_txt = read_text(sys_path)
-
 old_icon = '\tif runtime.GOOS != "android" {'
 new_icon = '\tif runtime.GOOS != "android" && runtime.GOOS != "ios" {'
 if old_icon in sys_txt:
     sys_txt = sys_txt.replace(old_icon, new_icon, 1)
     print("==> Patched src/system.go (skip desktop WindowIcon on iOS)")
-elif new_icon in sys_txt:
-    print("==> src/system.go WindowIcon guard already patched")
-else:
-    print("ERROR: Could not find WindowIcon guard in src/system.go!", file=sys.stderr)
-    sys.exit(1)
 
 old_shut = "\tgfx.Close()\n\ts.window.Close()"
 new_shut = "\tif gfx != nil {\n\t\tgfx.Close()\n\t}\n\tif s.window != nil {\n\t\ts.window.Close()\n\t}"
@@ -72,10 +75,9 @@ if old_shut in sys_txt:
     print("==> Patched src/system.go (nil-safe shutdown)")
 write_text(sys_path, sys_txt)
 
-# 4. src/main.go: lam sach os.Args tren iOS, chong nil gfx trong handlePanic, ghi last_error.txt va KHONG os.Exit tren iOS
+# 4. src/main.go
 main_path = os.path.join(repo_root, "src", "main.go")
 main_txt = read_text(main_path)
-
 ios_anchor = '\t} else if runtime.GOOS == "ios" {\n\t\tLogcat("Inside realMain...")'
 ios_patched = '\t} else if runtime.GOOS == "ios" {\n\t\tLogcat("Inside realMain...")\n\t\tos.Args = []string{"ikemen-go"}'
 if 'os.Args = []string{"ikemen-go"}' not in main_txt.split('else if runtime.GOOS == "ios"')[1][:300]:
@@ -118,3 +120,13 @@ if old_he in main_txt:
 
 write_text(main_path, main_txt)
 print("==> Patched src/main.go")
+
+# 5. build/build.sh: goi bundle_extra_chars.py ngay truoc khi nen DefaultAssets.zip
+sh_path = os.path.join(repo_root, "build", "build.sh")
+sh_txt = read_text(sh_path)
+zip_anchor = '\t( cd "$assets_dir" && zip -qr -X "$IOS_WRAPPER_DIR/DefaultAssets.zip" . )'
+hook_line = '\tpython3 "$REPO_ROOT/build/ios_custom/bundle_extra_chars.py" "$REPO_ROOT/build/ios_custom/extra_chars" "$assets_dir"\n' + zip_anchor
+if "bundle_extra_chars.py" not in sh_txt:
+    sh_txt = sh_txt.replace(zip_anchor, hook_line, 1)
+    write_text(sh_path, sh_txt)
+    print("==> Patched build/build.sh (hooked extra_chars bundler)")
