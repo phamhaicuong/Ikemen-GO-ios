@@ -12,7 +12,7 @@ def write_text(path, content):
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(content.replace("\r\n", "\n"))
 
-# 1. src/util_ios.go
+# 1. src/util_ios.go: GODEBUG + GOGC=50 an toan
 util_path = os.path.join(repo_root, "src", "util_ios.go")
 util = read_text(util_path)
 new_lines = []
@@ -25,7 +25,7 @@ for line in util.splitlines():
 write_text(util_path, "\n".join(new_lines) + "\n")
 print("==> Patched src/util_ios.go")
 
-# 2. src/resources/defaultConfig.ini
+# 2. src/resources/defaultConfig.ini: P1 menu=TAB, P2 menu=BACKSLASH, WindowIcon trong, FirstRun=0
 cfg_path = os.path.join(repo_root, "src", "resources", "defaultConfig.ini")
 cfg = read_text(cfg_path)
 for old, new in [
@@ -48,18 +48,20 @@ for old, new in [
 cfg = re.sub(r'(?m)^WindowIcon\s*=.*$', 'WindowIcon          =', cfg)
 
 out_cfg = []
-in_p1 = False
+cur_sec = ""
 for line in cfg.splitlines():
     st = line.strip()
     if st.startswith("[") and st.endswith("]"):
-        in_p1 = (st == "[Keys_P1]")
-    elif in_p1 and re.match(r'^menu\s*=', st):
+        cur_sec = st
+    elif cur_sec == "[Keys_P1]" and re.match(r'^menu\s*=', st):
         line = "menu     = TAB"
+    elif cur_sec == "[Keys_P2]" and re.match(r'^menu\s*=', st):
+        line = "menu     = BACKSLASH"
     out_cfg.append(line)
 write_text(cfg_path, "\n".join(out_cfg) + "\n")
-print("==> Patched src/resources/defaultConfig.ini (WindowIcon cleared, FirstRun=0, Keys_P1 menu=TAB)")
+print("==> Patched src/resources/defaultConfig.ini (P1 menu=TAB, P2 menu=BACKSLASH)")
 
-# 3. src/system.go
+# 3. src/system.go: bo WindowIcon & stdin tren iOS + nil-safe shutdown
 sys_path = os.path.join(repo_root, "src", "system.go")
 sys_txt = read_text(sys_path)
 old_icon = '\tif runtime.GOOS != "android" {'
@@ -75,7 +77,139 @@ if old_shut in sys_txt:
     print("==> Patched src/system.go (nil-safe shutdown)")
 write_text(sys_path, sys_txt)
 
-# 4. src/main.go
+# 4. src/system_sdl.go: FIX loi thoat ra chua gat vao lai bi dung/crash tren iOS
+sdl_path = os.path.join(repo_root, "src", "system_sdl.go")
+sdl_txt = read_text(sdl_path)
+old_bg = """\t\tcase sdl.CommonEvent:
+\t\t\t// Android Vulkan behavior (Activity background/resume)
+\t\t\tswitch t.Type {
+\t\t\tcase sdl.APP_WILLENTERBACKGROUND:
+\t\t\tcase sdl.APP_DIDENTERBACKGROUND:
+\t\t\t\tif rvk, ok := gfx.(*Renderer_VK); ok {
+\t\t\t\t\trvk.Await()
+\t\t\t\t\tw.renderingPaused = true
+\t\t\t\t}
+\t\t\tcase sdl.APP_DIDENTERFOREGROUND:
+\t\t\t\tif rvk, ok := gfx.(*Renderer_VK); ok {
+\t\t\t\t\trvk.RecreateSurfaceAndSwapchain()
+\t\t\t\t\trvk.surfaceLost = false
+\t\t\t\t}
+\t\t\t}"""
+
+new_bg = """\t\tcase sdl.CommonEvent:
+\t\t\t// Mobile Vulkan behavior (iOS & Android background/resume)
+\t\t\tswitch t.Type {
+\t\t\tcase sdl.APP_WILLENTERBACKGROUND, sdl.APP_DIDENTERBACKGROUND:
+\t\t\t\tif rvk, ok := gfx.(*Renderer_VK); ok {
+\t\t\t\t\tif !w.renderingPaused {
+\t\t\t\t\t\tif rvk.frameOpen {
+\t\t\t\t\t\t\trvk.EndFrame()
+\t\t\t\t\t\t}
+\t\t\t\t\t\trvk.Await()
+\t\t\t\t\t\tw.renderingPaused = true
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\tcase sdl.APP_WILLENTERFOREGROUND, sdl.APP_DIDENTERFOREGROUND:
+\t\t\t\tif rvk, ok := gfx.(*Renderer_VK); ok {
+\t\t\t\t\tif runtime.GOOS == "ios" {
+\t\t\t\t\t\t// On iOS, CAMetalLayer persists across background/resume.
+\t\t\t\t\t\trvk.Await()
+\t\t\t\t\t\trvk.surfaceLost = false
+\t\t\t\t\t\tw.renderingPaused = false
+\t\t\t\t\t} else {
+\t\t\t\t\t\trvk.RecreateSurfaceAndSwapchain()
+\t\t\t\t\t\trvk.surfaceLost = false
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t}"""
+
+if old_bg in sdl_txt:
+    sdl_txt = sdl_txt.replace(old_bg, new_bg, 1)
+    write_text(sdl_path, sdl_txt)
+    print("==> Patched src/system_sdl.go (fixed iOS background/resume Vulkan lifecycle)")
+elif "CAMetalLayer persists" in sdl_txt:
+    print("==> src/system_sdl.go already patched")
+else:
+    print("ERROR: Could not find CommonEvent block in src/system_sdl.go!", file=sys.stderr)
+    sys.exit(1)
+
+# 5. src/render_vk.go: xu ly ErrorOutOfDate & mo khoa surfaceMutex an toan tren iOS
+vk_path = os.path.join(repo_root, "src", "render_vk.go")
+vk_txt = read_text(vk_path)
+old_vk_acq = """\tif res != vk.Success {
+\t\tif res == vk.ErrorOutOfDate || res == vk.Suboptimal {
+\t\t\tif res == vk.Suboptimal && runtime.GOOS != "ios" && runtime.GOOS != "android" {
+\t\t\t\tLogMessage("[INFO] recreate swapchain")
+\t\t\t\tr.RecreateSwapchain()
+\t\t\t\tres = vk.AcquireNextImage(r.device, r.swapchains[0].swapchain,
+\t\t\t\t\tvk.MaxUint64, r.semaphores[0], vk.NullFence, &r.swapchains[0].currentImageIndex)
+\t\t\t\tif res != vk.Success {
+\t\t\t\t\t// Try continue execution if error is suboptimal
+\t\t\t\t\tif res == vk.Suboptimal {
+\t\t\t\t\t\tLogMessage("[WARNING] vk.AcquireNextImage returned suboptimal after swapchain recreation")
+\t\t\t\t\t\t// We're probably on Android and can recreate this
+\t\t\t\t\t} else if res == vk.ErrorSurfaceLost {
+\t\t\t\t\t\tr.surfaceLost = true
+\t\t\t\t\t\treturn
+\t\t\t\t\t} else {
+\t\t\t\t\t\terr := fmt.Errorf("vk.AcquireNextImage failed with %s", vk.Error(res))
+\t\t\t\t\t\tpanic(err)
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t}
+\t\t} else {
+\t\t\terr := fmt.Errorf("vk.AcquireNextImage failed with %s", vk.Error(res))
+\t\t\tpanic(err)
+\t\t}
+\t}"""
+
+new_vk_acq = """\tif res != vk.Success {
+\t\tif res == vk.ErrorOutOfDate || res == vk.Suboptimal {
+\t\t\tif res == vk.ErrorOutOfDate || (res == vk.Suboptimal && runtime.GOOS != "ios" && runtime.GOOS != "android") {
+\t\t\t\tLogMessage("[INFO] recreate swapchain")
+\t\t\t\tr.RecreateSwapchain()
+\t\t\t\tres = vk.AcquireNextImage(r.device, r.swapchains[0].swapchain,
+\t\t\t\t\tvk.MaxUint64, r.semaphores[0], vk.NullFence, &r.swapchains[0].currentImageIndex)
+\t\t\t\tif res != vk.Success {
+\t\t\t\t\tif res == vk.Suboptimal {
+\t\t\t\t\t\tLogMessage("[WARNING] vk.AcquireNextImage returned suboptimal after swapchain recreation")
+\t\t\t\t\t} else if res == vk.ErrorSurfaceLost {
+\t\t\t\t\t\tr.surfaceLost = true
+\t\t\t\t\t\tr.frameOpen = false
+\t\t\t\t\t\tr.surfaceMutex.Unlock()
+\t\t\t\t\t\treturn
+\t\t\t\t\t} else {
+\t\t\t\t\t\tr.frameOpen = false
+\t\t\t\t\t\tr.surfaceMutex.Unlock()
+\t\t\t\t\t\terr := fmt.Errorf("vk.AcquireNextImage failed with %s", vk.Error(res))
+\t\t\t\t\t\tpanic(err)
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t}
+\t\t} else if res == vk.ErrorSurfaceLost {
+\t\t\tr.surfaceLost = true
+\t\t\tr.frameOpen = false
+\t\t\tr.surfaceMutex.Unlock()
+\t\t\treturn
+\t\t} else {
+\t\t\tr.frameOpen = false
+\t\t\tr.surfaceMutex.Unlock()
+\t\t\terr := fmt.Errorf("vk.AcquireNextImage failed with %s", vk.Error(res))
+\t\t\tpanic(err)
+\t\t}
+\t}"""
+
+if old_vk_acq in vk_txt:
+    vk_txt = vk_txt.replace(old_vk_acq, new_vk_acq, 1)
+    write_text(vk_path, vk_txt)
+    print("==> Patched src/render_vk.go")
+elif 'if res == vk.ErrorOutOfDate || (res == vk.Suboptimal' in vk_txt:
+    print("==> src/render_vk.go already patched")
+else:
+    print("ERROR: Could not find AcquireNextImage block in src/render_vk.go!", file=sys.stderr)
+    sys.exit(1)
+
+# 6. src/main.go
 main_path = os.path.join(repo_root, "src", "main.go")
 main_txt = read_text(main_path)
 ios_anchor = '\t} else if runtime.GOOS == "ios" {\n\t\tLogcat("Inside realMain...")'
@@ -121,7 +255,7 @@ if old_he in main_txt:
 write_text(main_path, main_txt)
 print("==> Patched src/main.go")
 
-# 5. build/build.sh: goi bundle_extra_chars.py ngay truoc khi nen DefaultAssets.zip
+# 7. build/build.sh: nhung extra_chars (Goku) vao DefaultAssets.zip
 sh_path = os.path.join(repo_root, "build", "build.sh")
 sh_txt = read_text(sh_path)
 zip_anchor = '\t( cd "$assets_dir" && zip -qr -X "$IOS_WRAPPER_DIR/DefaultAssets.zip" . )'
