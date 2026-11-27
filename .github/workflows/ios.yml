@@ -11,7 +11,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout Ikemen-GO
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Go 1.27
         uses: actions/setup-go@v5
